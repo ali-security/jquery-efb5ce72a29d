@@ -21,6 +21,14 @@
 	<!-- See testinit for the list of tests -->
 	<script src="data/testinit.js"></script>
 
+	<!--
+		Headless reporting for test/headless/run.sh. Both files stay inert unless
+		the page URL carries a "headlessId" parameter, so opening this page in a
+		real browser behaves exactly as it did before.
+	-->
+	<script src="headless/excludes.js"></script>
+	<script src="headless/reporter.js"></script>
+
 	<!-- A script that includes jQuery min, dev, or AMD -->
 	<!-- Adds "basic" URL option, even to iframes -->
 	<!-- iframes will not load AMD as loading needs to be synchronous for some tests -->

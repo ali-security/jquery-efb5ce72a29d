@@ -1,0 +1,138 @@
+name: build
+
+# Build, test and pack. The grunt default task rebuilds dist/, the project's own
+# QUnit suite then runs against that rebuilt dist/, and only then is the npm
+# tarball packed. workflow_dispatch is the only trigger, so a fork sync never
+# starts a run.
+on:
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # ubuntu-24.04 ships Firefox and PHP, which the QUnit suite below needs, and
+    # runs the Node 0.10.48 binary the build needs without extra shims.
+    runs-on: ubuntu-24.04
+
+    # npm install on the 2014 dependency tree, the grunt build, a browser start
+    # and the ~60s QUnit suite all have to fit; 45 minutes leaves headroom.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      # actions/setup-node cannot reliably resolve pre-1.0 Node, so fetch the
+      # official 0.10.48 binary tarball. Unpacked under /tmp so the download
+      # never lands in the workspace and cannot enter the npm packlist.
+      - name: Install Node 0.10.48 from the official binary tarball
+        working-directory: /tmp
+        run: |
+          curl -fsSLO https://nodejs.org/dist/v0.10.48/node-v0.10.48-linux-x64.tar.gz
+          tar -xzf node-v0.10.48-linux-x64.tar.gz
+          echo "/tmp/node-v0.10.48-linux-x64/bin" >> "$GITHUB_PATH"
+
+      - name: Show Node and npm versions
+        run: |
+          echo "node: $(node -v)"
+          echo "npm:  $(npm -v)"
+          echo "which node: $(which node)"
+
+      # 2014-era devDependencies (grunt 0.4.2 and friends) have transitive deps
+      # that resolve too new for Node 0.10 against the live registry, so pin the
+      # registry to the release timestamp before installing.
+      - name: Pin npm registry to the release-date time machine
+        run: |
+          npm config set registry https://:2014-05-01T18%3A05%3A32.863Z@time-machines-npm.sealsecurity.io/
+          npm config get registry
+
+      - name: Install devDependencies
+        run: npm install
+
+      # The grunt default task regenerates dist/jquery.js, dist/jquery.min.js,
+      # dist/jquery.min.map and the nine dist/cdn/ copies from src/**, and all of
+      # those ship in the tarball, so the build must run rather than pack the
+      # committed dist/.
+      - name: Run the grunt build
+        run: ./node_modules/.bin/grunt
+
+      - name: Show rebuilt dist output
+        run: |
+          ls -la dist
+          ls -la dist/cdn
+          echo "--- head of dist/jquery.js ---"
+          head -20 dist/jquery.js
+          echo "--- head of dist/jquery.min.js ---"
+          head -c 120 dist/jquery.min.js
+          echo
+
+      # Prove the test environment in the log before anything depends on it.
+      - name: Show Firefox and PHP versions
+        run: |
+          echo "firefox: $(firefox --version)"
+          echo "php:     $(php --version)"
+
+      # jQuery's own README requires the suite to be served from the repository
+      # root by a server that runs PHP: ~20 of the ajax fixtures under test/data
+      # are .php files. PHP_CLI_SERVER_WORKERS makes the built-in server fork, so
+      # overlapping ajax requests are not serialised behind each other.
+      - name: Start the PHP test server on 127.0.0.1:8080
+        run: |
+          PHP_CLI_SERVER_WORKERS=8 php -S 127.0.0.1:8080 -t "$GITHUB_WORKSPACE" > /tmp/php-server.log 2>&1 &
+          sleep 3
+          curl -sS -o /dev/null -w 'GET /test/index.html -> %{http_code}\n' http://127.0.0.1:8080/test/index.html
+          curl -sS -o /dev/null -w 'GET /test/data/name.php -> %{http_code}\n' 'http://127.0.0.1:8080/test/data/name.php?name=foo'
+
+      # jQuery 1.11.x shipped no headless test task -- upstream ran
+      # test/index.html on the TestSwarm browser farm -- so test/headless/run.sh
+      # is that missing task: it drives test/index.html directly in headless
+      # Firefox against the server started above, prints the per-module,
+      # per-test and per-assertion transcript plus the assertion totals, and
+      # exits non-zero on any failed assertion, on a suite that never finished,
+      # and on a browser that died on the way. Nothing wraps it, so a failed
+      # assertion fails this step and the job.
+      #
+      # Firefox, not Chrome: Chrome 80+ rejects synchronous XHR during page
+      # dismissal outright (chromestatus 4664843055398912) and no flag or policy
+      # brings it back, which permanently fails
+      # "ajax: #14379 - jQuery.ajax() on unload". See the engine notes in
+      # test/headless/run.sh.
+      - name: Run jQuery QUnit suite (headless Firefox)
+        run: JQUERY_TEST_PORT=8080 JQUERY_TEST_ENGINE=firefox ./test/headless/run.sh
+
+      # .npmignore is byte-compared against the public release, so it carries no
+      # "/.github" entry to keep this workflow out of the packlist. Delete the
+      # scaffolding from the working tree instead, immediately before packing.
+      # Nothing after this step reads .github.
+      - name: Remove the workflow scaffolding from the packed tree
+        run: |
+          rm -rf .github
+          ls -a
+
+      # The public tarball was packed with npm 1.2.25, whose packlist differs from
+      # later majors. It cannot be installed globally on Node 0.10
+      # (npm i -g npm@1.2.25 fails on Node < 4), so fetch the tarball from the
+      # real registry -- npm bundles its own node_modules -- and run it in place.
+      - name: Pack the tarball with npm 1.2.25
+        run: |
+          curl -fsSL https://registry.npmjs.org/npm/-/npm-1.2.25.tgz -o /tmp/npm125.tgz
+          mkdir -p /tmp/npm125
+          tar -xzf /tmp/npm125.tgz -C /tmp/npm125 --strip-components=1
+          node /tmp/npm125/bin/npm-cli.js --version
+          node /tmp/npm125/bin/npm-cli.js pack
+
+      - name: Show tarball and its member list
+        run: |
+          ls -la *.tgz
+          echo "--- tarball members ---"
+          tar -tzf jquery-1.11.1.tgz | sort
+
+      - name: Upload the npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: jquery-1.11.1.tgz
+          if-no-files-found: error
