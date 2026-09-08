@@ -477,7 +477,9 @@ test( "attr(String, Object)", function() {
 test( "attr - extending the boolean attrHandle", function() {
 	expect( 1 );
 	var called = false,
-		_handle = jQuery.expr.attrHandle.checked || $.noop;
+		origAttrHandleHadChecked = "checked" in jQuery.expr.attrHandle,
+		origAttrHandleChecked = jQuery.expr.attrHandle.checked,
+		_handle = origAttrHandleChecked || $.noop;
 	jQuery.expr.attrHandle.checked = function() {
 		called = true;
 		_handle.apply( this, arguments );
@@ -486,6 +488,12 @@ test( "attr - extending the boolean attrHandle", function() {
 	called = false;
 	jQuery( "input" ).attr( "checked" );
 	ok( called, "The boolean attrHandle does not drop custom attrHandles" );
+
+	if ( origAttrHandleHadChecked ) {
+		jQuery.expr.attrHandle.checked = origAttrHandleChecked;
+	} else {
+		delete jQuery.expr.attrHandle.checked;
+	}
 });
 
 test( "attr(String, Object) - Loaded via XML document", function() {
@@ -1475,4 +1483,42 @@ test( "Insignificant white space returned for $(option).val() (#14858)", functio
 
 	val = jQuery( "<option>  test  </option>" ).val();
 	equal( val.length, 4, "insignificant white-space returned for value" );
+});
+
+test( "non-lowercase boolean attribute getters should not crash", function() {
+	expect( 5 );
+
+	var elem = jQuery( "<input checked required autofocus type='checkbox'>" ),
+		inputs = jQuery( "<div><input checked type='checkbox'><input type='checkbox'></div>" )
+			.find("input");
+
+	jQuery.each({
+		checked: "Checked",
+		required: "requiRed",
+		autofocus: "AUTOFOCUS"
+	}, function( lowercased, original ) {
+		try {
+			strictEqual( elem.attr( original ), lowercased,
+				"The '" + this + "' attribute getter should return the lowercased name" );
+		} catch ( e ) {
+			ok( false, "The '" + this + "' attribute getter threw: " + e );
+		}
+	});
+
+	// The boolean attrHandle is also reached with a non-lowercase name through
+	// the selector engine; it used to remove itself under the wrong key there
+	// and recurse until the stack blew up
+	try {
+		strictEqual( jQuery.find.attr( inputs[ 0 ], "Checked" ), "checked",
+			"The boolean attrHandle returns the lowercased name" );
+	} catch ( e ) {
+		ok( false, "The boolean attrHandle threw for a non-lowercase name: " + e );
+	}
+
+	try {
+		strictEqual( inputs.filter("[Checked]").length, 1,
+			"Filtering by a non-lowercase boolean attribute finds the checked input" );
+	} catch ( e ) {
+		ok( false, "Filtering by a non-lowercase boolean attribute threw: " + e );
+	}
 });
