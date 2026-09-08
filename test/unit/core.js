@@ -1103,6 +1103,19 @@ test("jQuery.extend(Object, Object)", function() {
 	deepEqual( options2, options2Copy, "Check if not modified: options2 must not be modified" );
 });
 
+test("jQuery.extend( true, ... ) Object.prototype pollution", function() {
+	expect( 3 );
+
+	jQuery.extend( true, {}, JSON.parse( "{\"__proto__\": {\"devMode\": true}}" ) );
+	ok( !( "devMode" in {} ), "Object.prototype not polluted" );
+
+	jQuery.extend( true, {}, JSON.parse( "{\"nested\": {\"__proto__\": {\"devMode2\": true}}}" ) );
+	ok( !( "devMode2" in {} ), "Object.prototype not polluted through a nested object" );
+
+	ok( !( "devMode3" in jQuery.extend( {}, JSON.parse( "{\"__proto__\": {\"devMode3\": true}}" ) ) ),
+		"__proto__ not copied in a shallow extend" );
+});
+
 test("jQuery.each(Object,Function)", function() {
 	expect( 23 );
 
